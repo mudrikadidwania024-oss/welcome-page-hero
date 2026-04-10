@@ -48,8 +48,8 @@ const PayViaQR = () => {
       .single();
 
     if (error || !data) {
-      toast.error("Invalid QR code - user not found");
-      await speak("Invalid QR code. User not found.");
+      toast.error("Invalid QR code");
+      await speak("Invalid QR code.");
       navigate("/");
       return;
     }
@@ -61,64 +61,36 @@ const PayViaQR = () => {
     }
     setReceiver(data);
 
-    // Full voice-driven payment flow
     if (!hasSpoken.current) {
       hasSpoken.current = true;
       const name = data.display_name || data.phone || "this user";
 
-      // Ask for amount with retry
-      const amtAnswer = await askVoice(`You are paying ${name}. How much would you like to send?`);
+      // Ask amount, then direct biometric — no confirm
+      const amtAnswer = await askVoice(`Paying ${name}. How much to send?`);
       const amt = extractAmount(amtAnswer);
 
       if (amt && amt > 0) {
         setAmount(String(amt));
-
-        // Ask for confirmation
-        const confirmAnswer = await askVoice(
-          `Sending ₹${amt} to ${name}. Say confirm or yes to proceed, or cancel to stop.`
-        );
-        const cLower = confirmAnswer.toLowerCase();
-        if (
-          cLower.includes("confirm") || cLower.includes("yes") ||
-          cLower.includes("haan") || cLower.includes("ok") ||
-          cLower.includes("proceed") || cLower.includes("ha")
-        ) {
-          await doPayVoice(data, amt);
-        } else {
-          await speak("Payment cancelled. You can still pay using the form.");
-        }
+        await speak(`Sending ₹${amt} to ${name}. Please authenticate.`);
+        await doPayVoice(data, amt);
       } else {
-        await speak("I couldn't get the amount. Please say it again.");
-        // Second attempt
-        const amt2Answer = await askVoice(`How much do you want to send to ${name}?`);
+        const amt2Answer = await askVoice(`Didn't get the amount. How much for ${name}?`);
         const amt2 = extractAmount(amt2Answer);
         if (amt2 && amt2 > 0) {
           setAmount(String(amt2));
-          const confirmAnswer = await askVoice(
-            `Sending ₹${amt2} to ${name}. Say confirm or yes to proceed.`
-          );
-          const cLower = confirmAnswer.toLowerCase();
-          if (
-            cLower.includes("confirm") || cLower.includes("yes") ||
-            cLower.includes("haan") || cLower.includes("ok") ||
-            cLower.includes("proceed") || cLower.includes("ha")
-          ) {
-            await doPayVoice(data, amt2);
-          } else {
-            await speak("Payment cancelled.");
-          }
+          await speak(`Sending ₹${amt2} to ${name}. Please authenticate.`);
+          await doPayVoice(data, amt2);
         } else {
-          await speak("I still couldn't get the amount. You can type it in the form below.");
+          await speak("Couldn't get the amount. You can use the form.");
         }
       }
     }
   };
 
   const doPayVoice = async (receiverData: any, payAmount: number) => {
-    await speak("Please authenticate with your fingerprint to confirm.");
     const bioOk = await authenticateWithBiometric(`₹${payAmount}`);
     if (!bioOk) {
-      await speak("Authentication cancelled. Payment not processed.");
+      await speak("Authentication cancelled.");
       return;
     }
 
@@ -135,7 +107,7 @@ const PayViaQR = () => {
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error || "Payment failed");
 
-      await speak(`Payment of ₹${payAmount} to ${receiverData.display_name || "the recipient"} confirmed successfully!`);
+      await speak(`₹${payAmount} sent to ${receiverData.display_name || "the recipient"} successfully!`);
       setShowSuccess(true);
     } catch (err: any) {
       await speak(`Payment failed. ${err.message || ""}`);
@@ -151,7 +123,6 @@ const PayViaQR = () => {
     const numAmount = parseFloat(amount);
     if (!numAmount || numAmount <= 0) {
       toast.error("Enter a valid amount");
-      await speak("Please enter a valid amount.");
       return;
     }
 
@@ -168,7 +139,7 @@ const PayViaQR = () => {
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error || "Payment failed");
 
-      await speak(`Payment of ₹${numAmount} to ${receiver.display_name || "the recipient"} confirmed successfully!`);
+      await speak(`₹${numAmount} sent successfully!`);
       setShowSuccess(true);
     } catch (err: any) {
       await speak(`Payment failed. ${err.message || ""}`);

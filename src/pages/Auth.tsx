@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { speak, listenOnce, extractDigits, stopSpeaking, warmUpTTS } from "@/lib/voice";
 import vaanipayLogo from "@/assets/vaanipay-logo.jpeg";
-import { Mic, MicOff, Loader2 } from "lucide-react";
+import { Mic, Loader2 } from "lucide-react";
 
 const Auth = () => {
   const navigate = useNavigate();
@@ -22,8 +22,6 @@ const Auth = () => {
     };
   }, []);
 
-  // Auto-start voice flow on ANY user interaction (tap anywhere on screen)
-  // This satisfies browser gesture policy for blind users who just need to tap once
   useEffect(() => {
     if (voiceStarted) return;
 
@@ -34,7 +32,6 @@ const Auth = () => {
       startVoiceLogin();
     };
 
-    // Listen for any touch/click/keypress on the entire document
     document.addEventListener("click", handleFirstInteraction, { once: true });
     document.addEventListener("touchstart", handleFirstInteraction, { once: true });
     document.addEventListener("keydown", handleFirstInteraction, { once: true });
@@ -50,14 +47,13 @@ const Auth = () => {
     if (!isMounted.current) return;
     try {
       setVoiceStatus("speaking");
-      await speak("Welcome to VaaniPay. Please tell me your 10 digit mobile number.", "en-IN");
-
+      // Shorter, faster prompt to reduce lag
+      await speak("Welcome to VaaniPay. Say your 10 digit mobile number.", "en-IN");
       if (!isMounted.current) return;
       await listenForNumber();
     } catch (err: any) {
-      console.error("Voice login error:", err);
       if (err.message === "not-allowed") {
-        toast.error("Microphone access denied. Please allow microphone and try again.");
+        toast.error("Microphone access denied.");
         setVoiceStatus("idle");
       } else {
         if (isMounted.current) {
@@ -78,12 +74,11 @@ const Auth = () => {
       try {
         setVoiceStatus("listening");
         const result = await listenOnce("en-IN", 10000);
-
         if (!isMounted.current) return;
 
         if (!result) {
           setVoiceStatus("speaking");
-          await speak("I didn't hear anything. Please say your 10 digit mobile number.", "en-IN");
+          await speak("I didn't hear anything. Say your number.", "en-IN");
           continue;
         }
 
@@ -91,7 +86,7 @@ const Auth = () => {
 
         if (digits.length < 10) {
           setVoiceStatus("speaking");
-          await speak(`I heard ${digits.length} digits. I need 10 digits. Please try again.`, "en-IN");
+          await speak(`I heard ${digits.length} digits. I need 10. Try again.`, "en-IN");
           continue;
         }
 
@@ -99,28 +94,25 @@ const Auth = () => {
         setPhone(phoneNumber);
 
         setVoiceStatus("speaking");
-        await speak(`I heard ${phoneNumber.split("").join(" ")}. Logging you in.`, "en-IN");
+        await speak(`Got it. ${phoneNumber.split("").join(" ")}. Logging in.`, "en-IN");
 
         await doLogin(phoneNumber);
         return;
       } catch (err: any) {
-        console.error("Listen error:", err);
         if (err.message === "not-allowed") {
           toast.error("Microphone access denied.");
           setVoiceStatus("idle");
           return;
         }
-        // Any other error, retry
         setVoiceStatus("speaking");
-        await speak("I didn't catch that. Please say your number.", "en-IN");
+        await speak("Didn't catch that. Say your number.", "en-IN");
       }
     }
 
-    // After 5 attempts
     setVoiceStatus("speaking");
-    await speak("I'm having trouble hearing you. Please tap anywhere on the screen to try again.", "en-IN");
+    await speak("Having trouble hearing you. Tap the screen to try again.", "en-IN");
     setVoiceStatus("idle");
-    setVoiceStarted(false); // Allow re-trigger on next tap
+    setVoiceStarted(false);
   };
 
   const doLogin = async (phoneNum: string) => {
@@ -139,7 +131,7 @@ const Auth = () => {
           refresh_token: data.session.refresh_token,
         });
         setVoiceStatus("speaking");
-        await speak("Login successful! Welcome back.", "en-IN");
+        await speak("Login successful!", "en-IN");
         toast.success("Login successful!");
         navigate("/");
       } else {
@@ -147,7 +139,7 @@ const Auth = () => {
       }
     } catch (err: any) {
       setVoiceStatus("speaking");
-      await speak(`Login failed. ${err.message || "Please try again."}`, "en-IN");
+      await speak(`Login failed. ${err.message || "Try again."}`, "en-IN");
       toast.error(err.message || "Login failed");
       if (isMounted.current) await listenForNumber();
     } finally {
@@ -165,25 +157,19 @@ const Auth = () => {
       <div className="w-full max-w-[430px] min-h-screen bg-card shadow-2xl flex flex-col">
         <div className="flex-1 flex flex-col items-center justify-center px-8">
           <div className="mb-8 animate-fade-in-up">
-            <img
-              src={vaanipayLogo}
-              alt="VaaniPay"
-              className="w-32 h-32 rounded-2xl object-cover shadow-lg"
-            />
+            <img src={vaanipayLogo} alt="VaaniPay" className="w-32 h-32 rounded-2xl object-cover shadow-lg" />
           </div>
 
-          <h1 className="text-2xl font-bold text-foreground mb-1 animate-fade-in-up">
-            Welcome to VaaniPay
-          </h1>
+          <h1 className="text-2xl font-bold text-foreground mb-1 animate-fade-in-up">Welcome to VaaniPay</h1>
           <p className="text-sm text-muted-foreground mb-2 animate-fade-in-up">
-            {voiceStarted ? "Voice login active" : "Tap anywhere to start voice login"}
+            {voiceStarted ? "Voice login active" : "Tap anywhere to start"}
           </p>
 
           <div className="mb-4 flex items-center gap-2 text-sm font-medium animate-fade-in-up min-h-[28px]">
             {voiceStatus === "idle" && !voiceStarted && (
               <span className="text-primary flex items-center gap-1.5 animate-pulse">
                 <Mic className="w-4 h-4" />
-                Tap anywhere on screen to begin
+                Tap anywhere to begin
               </span>
             )}
             {voiceStatus === "speaking" && (
@@ -195,7 +181,7 @@ const Auth = () => {
             {voiceStatus === "listening" && (
               <span className="text-destructive flex items-center gap-1.5">
                 <Mic className="w-4 h-4 animate-pulse" />
-                Listening for your number...
+                Listening...
               </span>
             )}
             {voiceStatus === "processing" && (
@@ -219,7 +205,6 @@ const Auth = () => {
                 readOnly
                 className="flex-1 bg-transparent text-lg font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none tracking-wider"
                 maxLength={10}
-                aria-label="Phone number filled by voice"
               />
             </div>
 

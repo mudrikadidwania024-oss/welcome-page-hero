@@ -1,4 +1,4 @@
-import { Search, QrCode, Contact, Phone, Building2, AtSign, ArrowLeftRight, Receipt, Smartphone, Copy, Bell, ChevronRight } from "lucide-react";
+import { Search, QrCode, Contact, Phone, Building2, AtSign, ArrowLeftRight, Receipt, Smartphone, Copy, Bell, ChevronRight, Fingerprint, Eye, EyeOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
@@ -9,6 +9,8 @@ import QuickAction from "@/components/QuickAction";
 import ContactAvatar from "@/components/ContactAvatar";
 import BottomNav from "@/components/BottomNav";
 import heroBanner from "@/assets/hero-banner.jpg";
+import { isBiometricAvailable, authenticateWithBiometric } from "@/lib/biometric";
+import { speak } from "@/lib/voice";
 
 const promotions = [
   { title: "₹15,00,000", subtitle: "Get Instant Cash", icon: "💰" },
@@ -21,6 +23,8 @@ const Index = () => {
   const [searchFocused, setSearchFocused] = useState(false);
   const [profile, setProfile] = useState<any>(null);
   const [recentTx, setRecentTx] = useState<any[]>([]);
+  const [balanceVisible, setBalanceVisible] = useState(false);
+  const [balanceLoading, setBalanceLoading] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -47,7 +51,6 @@ const Index = () => {
       .limit(5);
 
     if (data) {
-      // Deduplicate by receiver_id
       const seen = new Set();
       const unique = data.filter((tx: any) => {
         if (seen.has(tx.receiver_id)) return false;
@@ -56,6 +59,26 @@ const Index = () => {
       });
       setRecentTx(unique);
     }
+  };
+
+  const handleShowBalance = async () => {
+    if (balanceVisible) {
+      setBalanceVisible(false);
+      return;
+    }
+    setBalanceLoading(true);
+    try {
+      await speak("Please authenticate to view your balance.");
+      const bioOk = await authenticateWithBiometric("view balance");
+      if (bioOk) {
+        setBalanceVisible(true);
+        const bal = profile ? Number(profile.balance).toLocaleString("en-IN") : "0";
+        await speak(`Your balance is ₹${bal}`);
+      }
+    } catch {
+      // cancelled
+    }
+    setBalanceLoading(false);
   };
 
   const quickActions = [
@@ -108,12 +131,34 @@ const Index = () => {
           </div>
         </div>
 
-        {/* Balance Card */}
+        {/* Balance Card — hidden until biometric */}
         <div className="px-4 pt-3 pb-1 animate-fade-in-up stagger-1">
           <div className="bg-gradient-to-br from-primary to-blue-400 rounded-2xl p-4 shadow-lg">
             <p className="text-sm text-primary-foreground/80 font-medium">Hello, {displayName}</p>
-            <p className="text-3xl font-extrabold text-primary-foreground mt-1">₹{balance}</p>
-            <p className="text-xs text-primary-foreground/60 mt-1">Available Balance</p>
+            <div className="flex items-center gap-3 mt-1">
+              {balanceVisible ? (
+                <p className="text-3xl font-extrabold text-primary-foreground">₹{balance}</p>
+              ) : (
+                <p className="text-3xl font-extrabold text-primary-foreground">₹ ••••••</p>
+              )}
+              <button
+                onClick={handleShowBalance}
+                disabled={balanceLoading}
+                className="p-2 rounded-full bg-primary-foreground/20 hover:bg-primary-foreground/30 transition-colors"
+                aria-label={balanceVisible ? "Hide balance" : "Show balance with fingerprint"}
+              >
+                {balanceLoading ? (
+                  <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                ) : balanceVisible ? (
+                  <EyeOff className="w-5 h-5 text-primary-foreground" />
+                ) : (
+                  <Fingerprint className="w-5 h-5 text-primary-foreground" />
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-primary-foreground/60 mt-1">
+              {balanceVisible ? "Available Balance" : "Tap fingerprint to view balance"}
+            </p>
           </div>
         </div>
 

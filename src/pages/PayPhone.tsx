@@ -5,7 +5,7 @@ import MobileLayout from "@/components/MobileLayout";
 import PaymentSuccess from "@/components/PaymentSuccess";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { speak, listenOnce, extractDigits, extractAmount, warmUpTTS } from "@/lib/voice";
+import { speak, listenOnce, extractDigits, extractAmount } from "@/lib/voice";
 import { authenticateWithBiometric } from "@/lib/biometric";
 
 const askVoice = async (question: string, retries = 3): Promise<string> => {
@@ -48,29 +48,18 @@ const PayPhone = () => {
       (async () => {
         await new Promise(r => setTimeout(r, 1000));
         if (state.autoAmount) {
-          const confirmAnswer = await askVoice(`Paying ₹${state.autoAmount} to ${state.autoPhone}. Say confirm or yes to proceed.`);
-          const cLower = confirmAnswer.toLowerCase();
-          if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok")) {
-            await doPay(state.autoPhone, String(state.autoAmount));
-          } else {
-            await speak("Payment cancelled.");
-          }
+          // No confirm — direct biometric
+          await speak(`Sending ₹${state.autoAmount} to ${state.autoPhone}. Please authenticate.`);
+          await doPay(state.autoPhone, String(state.autoAmount));
         } else {
-          // Ask for amount via voice
-          const amtAnswer = await askVoice(`Number ${state.autoPhone} is entered. How much do you want to send?`);
+          const amtAnswer = await askVoice(`Number ${state.autoPhone} entered. How much to send?`);
           const amt = extractAmount(amtAnswer);
           if (amt) {
             setAmount(String(amt));
-            const confirmAnswer = await askVoice(`Sending ₹${amt} to ${state.autoPhone}. Say confirm or yes to proceed.`);
-            const cLower = confirmAnswer.toLowerCase();
-            if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok")) {
-              await doPay(state.autoPhone, String(amt));
-            } else {
-              await speak("Payment cancelled.");
-            }
+            await speak(`Sending ₹${amt} to ${state.autoPhone}. Please authenticate.`);
+            await doPay(state.autoPhone, String(amt));
           } else {
-            await speak("I couldn't get the amount. Please say it again.");
-            const amt2Answer = await askVoice("How much do you want to send?");
+            const amt2Answer = await askVoice("Didn't get the amount. How much?");
             const amt2 = extractAmount(amt2Answer);
             if (amt2) {
               setAmount(String(amt2));
@@ -89,12 +78,11 @@ const PayPhone = () => {
     hasVoiceStarted.current = true;
 
     const runVoice = async () => {
-      // Ask for phone number with retries
       let phone = "";
       for (let attempt = 0; attempt < 3; attempt++) {
         const prompt = attempt === 0
-          ? "Pay by Phone is open. Please say the 10 digit mobile number."
-          : "I didn't catch a valid 10 digit number. Please say it again slowly.";
+          ? "Pay by Phone. Say the 10 digit mobile number."
+          : "Didn't get a valid number. Say it again slowly.";
         const phoneAnswer = await askVoice(prompt, 1);
         const digits = extractDigits(phoneAnswer);
         if (digits.length >= 10) {
@@ -102,56 +90,45 @@ const PayPhone = () => {
           break;
         }
         if (digits.length > 0) {
-          await speak(`I heard only ${digits.length} digits. I need 10 digits.`);
+          await speak(`Heard ${digits.length} digits. Need 10.`);
         }
       }
 
       if (!phone) {
-        await speak("I couldn't get the number after multiple tries. Please say it one more time.");
-        const lastTry = await askVoice("Please say the 10 digit mobile number.", 1);
+        await speak("Couldn't get the number. Say it one more time.");
+        const lastTry = await askVoice("Say the 10 digit number.", 1);
         const lastDigits = extractDigits(lastTry);
         if (lastDigits.length >= 10) phone = lastDigits.slice(0, 10);
       }
 
       if (!phone) {
-        await speak("I still couldn't get the number. You can type it in the form.");
+        await speak("Still couldn't get the number. Please try again later.");
         return;
       }
 
       setPhoneNumber(phone);
       handleLookup(phone);
 
-      // Ask for amount with retry
-      const amtAnswer = await askVoice(`Number ${phone} entered. Now please say the amount you want to send.`);
+      // Ask amount, then direct biometric — no confirm
+      const amtAnswer = await askVoice(`Number ${phone} entered. How much to send?`);
       const amt = extractAmount(amtAnswer);
 
       if (!amt) {
-        const amt2Answer = await askVoice("I didn't catch the amount. Please say it again.");
+        const amt2Answer = await askVoice("Didn't catch the amount. Say it again.");
         const amt2 = extractAmount(amt2Answer);
         if (!amt2) {
-          await speak("I couldn't get the amount. You can type it in the form.");
+          await speak("Couldn't get the amount. Please try again later.");
           return;
         }
         setAmount(String(amt2));
-        const confirmAnswer = await askVoice(`Sending ₹${amt2} to ${phone}. Say confirm or yes to pay.`);
-        const cLower = confirmAnswer.toLowerCase();
-        if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok") || cLower.includes("proceed")) {
-          await doPay(phone, String(amt2));
-        } else {
-          await speak("Payment cancelled.");
-        }
+        await speak(`Sending ₹${amt2} to ${phone}. Please authenticate.`);
+        await doPay(phone, String(amt2));
         return;
       }
 
       setAmount(String(amt));
-
-      const confirmAnswer = await askVoice(`Sending ₹${amt} to ${phone}. Say confirm or yes to pay, or cancel to stop.`);
-      const cLower = confirmAnswer.toLowerCase();
-      if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok") || cLower.includes("proceed")) {
-        await doPay(phone, String(amt));
-      } else {
-        await speak("Payment cancelled.");
-      }
+      await speak(`Sending ₹${amt} to ${phone}. Please authenticate.`);
+      await doPay(phone, String(amt));
     };
 
     setTimeout(runVoice, 800);
@@ -176,10 +153,9 @@ const PayPhone = () => {
   };
 
   const doPay = async (phone: string, payAmount: string) => {
-    await speak("Please authenticate with your fingerprint to confirm the transaction.");
     const bioOk = await authenticateWithBiometric(`₹${payAmount}`);
     if (!bioOk) {
-      await speak("Authentication cancelled. Payment not processed.");
+      await speak("Authentication cancelled.");
       return;
     }
     setPayLoading(true);
@@ -195,7 +171,7 @@ const PayPhone = () => {
         if (!data?.ok) throw new Error(data?.error || "Payment failed");
       }
 
-      await speak(`Payment of ₹${payAmount} to ${phone} completed successfully!`);
+      await speak(`₹${payAmount} sent to ${phone} successfully!`);
       setShowSuccess(true);
     } catch (err: any) {
       await speak(`Payment failed. ${err.message || ""}`);
@@ -239,7 +215,7 @@ const PayPhone = () => {
         </div>
 
         <div className="px-4 py-6">
-          <p className="text-sm text-muted-foreground mb-6 animate-fade-in-up">Pay any mobile number from your bank account instantly via UPI.</p>
+          <p className="text-sm text-muted-foreground mb-6 animate-fade-in-up">Pay any mobile number instantly via UPI.</p>
 
           <div className="flex items-center gap-3 border-b-2 border-primary pb-2 mb-4 animate-fade-in-up stagger-1">
             <div className="flex items-center gap-2 border border-border rounded-lg px-2 py-1 bg-muted/50">
