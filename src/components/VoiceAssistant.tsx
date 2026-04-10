@@ -59,15 +59,31 @@ const VoiceAssistant = () => {
   const hasAutoStarted = useRef(false);
   const shouldAutoListen = useRef(true);
 
-  // Reset auto-start flag when user changes (new login)
+  // Auto-start voice assistant after login on first user interaction (tap/click/key)
   useEffect(() => {
-    if (user) {
-      hasAutoStarted.current = false;
-    }
-  }, [user?.id]);
+    if (!user || hasAutoStarted.current) return;
 
-  // Don't auto-start speaking on home page — browser will block TTS without gesture.
-  // Instead, show a prompt for the user to tap the mic.
+    const autoActivate = () => {
+      if (hasAutoStarted.current) return;
+      hasAutoStarted.current = true;
+      warmUpTTS();
+      // Small delay to let page render
+      setTimeout(() => {
+        setShowOverlay(true);
+        speakAndShow("Welcome to VaaniPay. I am your voice assistant. What would you like to do? You can say: send money, pay bills, check balance, scan QR, recharge, or open any section.").then(() => {
+          autoStartListening();
+        });
+      }, 600);
+    };
+
+    // Listen for any user gesture to unlock audio
+    const events = ["click", "touchstart", "keydown"];
+    events.forEach(e => document.addEventListener(e, autoActivate, { once: true }));
+
+    return () => {
+      events.forEach(e => document.removeEventListener(e, autoActivate));
+    };
+  }, [user]);
 
   const speakAndShow = useCallback(async (text: string) => {
     setIsSpeaking(true);
@@ -466,8 +482,15 @@ const VoiceAssistant = () => {
 
   return (
     <>
+      {/* Always-visible mic button — tapping re-activates if overlay was closed */}
       <button
-        onClick={() => { warmUpTTS(); startListening(); speakAndShow("VaaniPay is ready. What would you like to do?"); }}
+        onClick={() => {
+          warmUpTTS();
+          setShowOverlay(true);
+          speakAndShow("VaaniPay is ready. What would you like to do?").then(() => {
+            autoStartListening();
+          });
+        }}
         className="fixed bottom-24 right-5 z-50 w-14 h-14 rounded-full bg-primary shadow-lg flex items-center justify-center hover:scale-105 active:scale-95 transition-transform animate-pulse"
         aria-label="Voice assistant"
       >
