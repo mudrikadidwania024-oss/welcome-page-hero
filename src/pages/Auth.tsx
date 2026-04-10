@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { speakSarvam, listenOnce, extractDigits, stopSpeaking, warmUpTTS } from "@/lib/voice";
+import { speak, listenOnce, extractDigits, stopSpeaking, warmUpTTS } from "@/lib/voice";
 import vaanipayLogo from "@/assets/vaanipay-logo.jpeg";
 import { Mic, MicOff, Loader2 } from "lucide-react";
 
@@ -11,23 +11,47 @@ const Auth = () => {
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<"idle" | "speaking" | "listening" | "processing">("idle");
-  const hasGreeted = useRef(false);
+  const [voiceStarted, setVoiceStarted] = useState(false);
   const isMounted = useRef(true);
 
   useEffect(() => {
     isMounted.current = true;
-    return () => { isMounted.current = false; };
+    return () => {
+      isMounted.current = false;
+      stopSpeaking();
+    };
   }, []);
 
-  // Don't auto-start voice on mount — it will be blocked by browser gesture policy.
-  // User must tap the mic button to start voice login.
+  // Auto-start voice flow on ANY user interaction (tap anywhere on screen)
+  // This satisfies browser gesture policy for blind users who just need to tap once
+  useEffect(() => {
+    if (voiceStarted) return;
+
+    const handleFirstInteraction = () => {
+      if (voiceStarted) return;
+      setVoiceStarted(true);
+      warmUpTTS();
+      startVoiceLogin();
+    };
+
+    // Listen for any touch/click/keypress on the entire document
+    document.addEventListener("click", handleFirstInteraction, { once: true });
+    document.addEventListener("touchstart", handleFirstInteraction, { once: true });
+    document.addEventListener("keydown", handleFirstInteraction, { once: true });
+
+    return () => {
+      document.removeEventListener("click", handleFirstInteraction);
+      document.removeEventListener("touchstart", handleFirstInteraction);
+      document.removeEventListener("keydown", handleFirstInteraction);
+    };
+  }, [voiceStarted]);
 
   const startVoiceLogin = async () => {
     if (!isMounted.current) return;
     try {
       setVoiceStatus("speaking");
-      await speakSarvam("Welcome to VaaniPay. Please tell me your 10 digit mobile number.");
-      
+      await speak("Welcome to VaaniPay. Please tell me your 10 digit mobile number.", "en-IN");
+
       if (!isMounted.current) return;
       await listenForNumber();
     } catch (err: any) {
@@ -36,10 +60,9 @@ const Auth = () => {
         toast.error("Microphone access denied. Please allow microphone and try again.");
         setVoiceStatus("idle");
       } else {
-        // Auto-retry after a brief pause
         if (isMounted.current) {
           setVoiceStatus("speaking");
-          await speakSarvam("Let me try again.");
+          await speak("Let me try again.", "en-IN");
           if (isMounted.current) await listenForNumber();
         }
       }
@@ -48,52 +71,56 @@ const Auth = () => {
 
   const listenForNumber = async () => {
     if (!isMounted.current) return;
-    try {
-      setVoiceStatus("listening");
-      const result = await listenOnce("en-IN");
-      
+
+    for (let attempt = 0; attempt < 5; attempt++) {
       if (!isMounted.current) return;
 
-      if (!result) {
-        // No speech detected - auto retry
-        setVoiceStatus("speaking");
-        await speakSarvam("I didn't hear anything. Please say your mobile number.");
-        if (isMounted.current) await listenForNumber();
-        return;
-      }
+      try {
+        setVoiceStatus("listening");
+        const result = await listenOnce("en-IN", 10000);
 
-      const digits = extractDigits(result);
-      
-      if (digits.length < 10) {
-        setVoiceStatus("speaking");
-        await speakSarvam(`I heard ${digits.length} digits. I need 10 digits. Please try again.`);
-        if (isMounted.current) await listenForNumber();
-        return;
-      }
+        if (!isMounted.current) return;
 
-      const phoneNumber = digits.slice(0, 10);
-      setPhone(phoneNumber);
-      
-      setVoiceStatus("speaking");
-      await speakSarvam(`I heard ${phoneNumber.split("").join(" ")}. Logging you in.`);
-      
-      await doLogin(phoneNumber);
-    } catch (err: any) {
-      console.error("Listen error:", err);
-      if (err.message === "not-allowed") {
-        toast.error("Microphone access denied.");
-        setVoiceStatus("idle");
-      } else if (err.message === "no-speech" || err.message === "aborted") {
-        // Auto retry on no-speech
-        if (isMounted.current) {
+        if (!result) {
           setVoiceStatus("speaking");
-          await speakSarvam("I didn't catch that. Please say your number.");
-          if (isMounted.current) await listenForNumber();
+          await speak("I didn't hear anything. Please say your 10 digit mobile number.", "en-IN");
+          continue;
         }
-      } else {
-        setVoiceStatus("idle");
+
+        const digits = extractDigits(result);
+
+        if (digits.length < 10) {
+          setVoiceStatus("speaking");
+          await speak(`I heard ${digits.length} digits. I need 10 digits. Please try again.`, "en-IN");
+          continue;
+        }
+
+        const phoneNumber = digits.slice(0, 10);
+        setPhone(phoneNumber);
+
+        setVoiceStatus("speaking");
+        await speak(`I heard ${phoneNumber.split("").join(" ")}. Logging you in.`, "en-IN");
+
+        await doLogin(phoneNumber);
+        return;
+      } catch (err: any) {
+        console.error("Listen error:", err);
+        if (err.message === "not-allowed") {
+          toast.error("Microphone access denied.");
+          setVoiceStatus("idle");
+          return;
+        }
+        // Any other error, retry
+        setVoiceStatus("speaking");
+        await speak("I didn't catch that. Please say your number.", "en-IN");
       }
     }
+
+    // After 5 attempts
+    setVoiceStatus("speaking");
+    await speak("I'm having trouble hearing you. Please tap anywhere on the screen to try again.", "en-IN");
+    setVoiceStatus("idle");
+    setVoiceStarted(false); // Allow re-trigger on next tap
   };
 
   const doLogin = async (phoneNum: string) => {
@@ -112,7 +139,7 @@ const Auth = () => {
           refresh_token: data.session.refresh_token,
         });
         setVoiceStatus("speaking");
-        await speakSarvam("Login successful! Welcome back.");
+        await speak("Login successful! Welcome back.", "en-IN");
         toast.success("Login successful!");
         navigate("/");
       } else {
@@ -120,26 +147,21 @@ const Auth = () => {
       }
     } catch (err: any) {
       setVoiceStatus("speaking");
-      await speakSarvam(`Login failed. ${err.message || "Please try again."}`);
+      await speak(`Login failed. ${err.message || "Please try again."}`, "en-IN");
       toast.error(err.message || "Login failed");
-      // Auto retry after failed login
       if (isMounted.current) await listenForNumber();
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLogin = async () => {
-    warmUpTTS();
-    if (phone.length !== 10) {
-      toast.error("Please enter a valid 10-digit mobile number");
-      return;
-    }
-    await doLogin(phone);
-  };
-
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
+    <div
+      className="flex min-h-screen items-center justify-center bg-background cursor-pointer"
+      role="button"
+      tabIndex={0}
+      aria-label="Tap anywhere to start voice login"
+    >
       <div className="w-full max-w-[430px] min-h-screen bg-card shadow-2xl flex flex-col">
         <div className="flex-1 flex flex-col items-center justify-center px-8">
           <div className="mb-8 animate-fade-in-up">
@@ -154,31 +176,35 @@ const Auth = () => {
             Welcome to VaaniPay
           </h1>
           <p className="text-sm text-muted-foreground mb-2 animate-fade-in-up">
-            Login with your mobile number
+            {voiceStarted ? "Voice login active" : "Tap anywhere to start voice login"}
           </p>
 
-          {voiceStatus !== "idle" && (
-            <div className="mb-4 flex items-center gap-2 text-sm font-medium animate-fade-in-up">
-              {voiceStatus === "speaking" && (
-                <span className="text-primary flex items-center gap-1.5">
-                  <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-                  Speaking...
-                </span>
-              )}
-              {voiceStatus === "listening" && (
-                <span className="text-destructive flex items-center gap-1.5">
-                  <Mic className="w-4 h-4 animate-pulse" />
-                  Listening for your number...
-                </span>
-              )}
-              {voiceStatus === "processing" && (
-                <span className="text-muted-foreground flex items-center gap-1.5">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Logging in...
-                </span>
-              )}
-            </div>
-          )}
+          <div className="mb-4 flex items-center gap-2 text-sm font-medium animate-fade-in-up min-h-[28px]">
+            {voiceStatus === "idle" && !voiceStarted && (
+              <span className="text-primary flex items-center gap-1.5 animate-pulse">
+                <Mic className="w-4 h-4" />
+                Tap anywhere on screen to begin
+              </span>
+            )}
+            {voiceStatus === "speaking" && (
+              <span className="text-primary flex items-center gap-1.5">
+                <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
+                Speaking...
+              </span>
+            )}
+            {voiceStatus === "listening" && (
+              <span className="text-destructive flex items-center gap-1.5">
+                <Mic className="w-4 h-4 animate-pulse" />
+                Listening for your number...
+              </span>
+            )}
+            {voiceStatus === "processing" && (
+              <span className="text-muted-foreground flex items-center gap-1.5">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Logging in...
+              </span>
+            )}
+          </div>
 
           <div className="w-full space-y-4 animate-fade-in-up">
             <div className="flex items-center gap-3 border-2 border-border rounded-xl px-4 py-3 focus-within:border-primary transition-colors">
@@ -188,34 +214,28 @@ const Auth = () => {
               </div>
               <input
                 type="tel"
-                placeholder="Enter mobile number"
+                placeholder="Voice input active"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value.replace(/[^0-9]/g, ""))}
+                readOnly
                 className="flex-1 bg-transparent text-lg font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none tracking-wider"
                 maxLength={10}
+                aria-label="Phone number filled by voice"
               />
             </div>
 
             <div className="flex gap-3">
-              <button
-                onClick={handleLogin}
-                disabled={phone.length < 10 || loading}
-                className="flex-1 bg-primary text-primary-foreground font-bold py-3.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] text-base"
-              >
-                {loading ? "Logging in..." : "Login"}
-              </button>
-              <button
-                onClick={() => { warmUpTTS(); startVoiceLogin(); }}
-                disabled={loading || voiceStatus === "listening" || voiceStatus === "speaking"}
-                className="w-14 h-14 rounded-xl bg-primary/10 hover:bg-primary/20 flex items-center justify-center transition-colors disabled:opacity-50"
-                aria-label="Voice login"
-              >
-                {voiceStatus === "listening" ? (
-                  <MicOff className="w-5 h-5 text-destructive" />
+              <div className="flex-1 bg-primary/20 text-primary font-bold py-3.5 rounded-xl text-center text-base">
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Logging in...
+                  </span>
+                ) : voiceStarted ? (
+                  "Voice login in progress..."
                 ) : (
-                  <Mic className="w-5 h-5 text-primary" />
+                  "Tap screen to start"
                 )}
-              </button>
+              </div>
             </div>
           </div>
         </div>
