@@ -26,7 +26,7 @@ const Auth = () => {
     if (!isMounted.current) return;
     try {
       setVoiceStatus("speaking");
-      await speak("Welcome to VaaniPay. Please tell me your 10 digit mobile number.");
+      await speakSarvam("Welcome to VaaniPay. Please tell me your 10 digit mobile number.");
       
       if (!isMounted.current) return;
       await listenForNumber();
@@ -39,7 +39,7 @@ const Auth = () => {
         // Auto-retry after a brief pause
         if (isMounted.current) {
           setVoiceStatus("speaking");
-          await speak("Let me try again.");
+          await speakSarvam("Let me try again.");
           if (isMounted.current) await listenForNumber();
         }
       }
@@ -57,7 +57,7 @@ const Auth = () => {
       if (!result) {
         // No speech detected - auto retry
         setVoiceStatus("speaking");
-        await speak("I didn't hear anything. Please say your mobile number.");
+        await speakSarvam("I didn't hear anything. Please say your mobile number.");
         if (isMounted.current) await listenForNumber();
         return;
       }
@@ -66,7 +66,7 @@ const Auth = () => {
       
       if (digits.length < 10) {
         setVoiceStatus("speaking");
-        await speak(`I heard ${digits.length} digits. I need 10 digits. Please try again.`);
+        await speakSarvam(`I heard ${digits.length} digits. I need 10 digits. Please try again.`);
         if (isMounted.current) await listenForNumber();
         return;
       }
@@ -75,7 +75,7 @@ const Auth = () => {
       setPhone(phoneNumber);
       
       setVoiceStatus("speaking");
-      await speak(`I heard ${phoneNumber.split("").join(" ")}. Logging you in.`);
+      await speakSarvam(`I heard ${phoneNumber.split("").join(" ")}. Logging you in.`);
       
       await doLogin(phoneNumber);
     } catch (err: any) {
@@ -87,7 +87,7 @@ const Auth = () => {
         // Auto retry on no-speech
         if (isMounted.current) {
           setVoiceStatus("speaking");
-          await speak("I didn't catch that. Please say your number.");
+          await speakSarvam("I didn't catch that. Please say your number.");
           if (isMounted.current) await listenForNumber();
         }
       } else {
@@ -112,7 +112,7 @@ const Auth = () => {
           refresh_token: data.session.refresh_token,
         });
         setVoiceStatus("speaking");
-        await speak("Login successful! Welcome back.");
+        await speakSarvam("Login successful! Welcome back.");
         toast.success("Login successful!");
         navigate("/");
       } else {
@@ -120,7 +120,7 @@ const Auth = () => {
       }
     } catch (err: any) {
       setVoiceStatus("speaking");
-      await speak(`Login failed. ${err.message || "Please try again."}`);
+      await speakSarvam(`Login failed. ${err.message || "Please try again."}`);
       toast.error(err.message || "Login failed");
       // Auto retry after failed login
       if (isMounted.current) await listenForNumber();
