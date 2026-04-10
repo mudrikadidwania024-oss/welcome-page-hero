@@ -33,14 +33,16 @@ const recentContacts = [
   { name: "Sahil Sehgal" },
 ];
 
-const askVoice = async (question: string): Promise<string> => {
-  await speak(question);
-  try {
-    const result = await listenOnce("en-IN");
-    return result || "";
-  } catch {
-    return "";
+const askVoice = async (question: string, retries = 3): Promise<string> => {
+  for (let i = 0; i < retries; i++) {
+    const prompt = i === 0 ? question : "I didn't catch that. Please say it again.";
+    await speak(prompt);
+    try {
+      const result = await listenOnce("en-IN");
+      if (result && result.trim()) return result;
+    } catch {}
   }
+  return "";
 };
 
 const PayContact = () => {
@@ -127,7 +129,7 @@ const PayContact = () => {
         const phoneAnswer = await askVoice("What is the 10 digit phone number?");
         const digits = extractDigits(phoneAnswer);
         const phone = digits.length >= 10 ? digits.slice(0, 10) : "";
-        if (!phone) { await speak("I didn't catch the phone number. Please add manually."); return; }
+        if (!phone) { await speak("I didn't catch the phone number. Please try again later."); return; }
 
         const contact: Contact = { name, phone: `+91 ${phone.slice(0, 5)} ${phone.slice(5)}` };
         setContacts(prev => [...prev, contact]);
@@ -246,13 +248,47 @@ const PayContact = () => {
               } else {
                 await speak("Payment cancelled.");
               }
-            } else {
-              await speak("Please enter the amount manually.");
+          } else {
+              // Retry voice for amount instead of manual
+              const retry = await askVoice(`I didn't get the amount. How much do you want to send to ${found.name}?`);
+              const retryAmt = extractAmount(retry);
+              if (retryAmt) {
+                setAmount(String(retryAmt));
+                const confirmRetry = await askVoice(`Sending ₹${retryAmt} to ${found.name}. Say confirm or yes to proceed.`);
+                const crLower = confirmRetry.toLowerCase();
+                if (crLower.includes("confirm") || crLower.includes("yes") || crLower.includes("haan") || crLower.includes("ok")) {
+                  await doPayment(found, String(retryAmt));
+                } else {
+                  await speak("Payment cancelled.");
+                }
+              } else {
+                await speak("I still couldn't get the amount. Please try again later.");
+              }
             }
           })();
         }
       } else {
-        speak(`I couldn't find ${state.autoPayName} in your contacts. Please select a contact manually.`);
+        // Contact not found - retry voice search
+        const retryName = await askVoice(`I couldn't find ${state.autoPayName} in your contacts. Please say the contact name again.`);
+        const retryFound = contacts.find(c => c.name.toLowerCase().includes(retryName.toLowerCase()));
+        if (retryFound) {
+          setSelectedContact(retryFound);
+          const amtAnswer = await askVoice(`Found ${retryFound.name}. How much do you want to send?`);
+          const amt = extractAmount(amtAnswer);
+          if (amt) {
+            setAmount(String(amt));
+            const confirmAnswer = await askVoice(`Sending ₹${amt} to ${retryFound.name}. Say confirm or yes to proceed.`);
+            const cLower = confirmAnswer.toLowerCase();
+            if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok")) {
+              await doPayment(retryFound, String(amt));
+            } else {
+              await speak("Payment cancelled.");
+            }
+          }
+        } else {
+          await speak("Contact not found. Returning to home.");
+          navigate("/");
+        }
       }
     }
   }, [location.state, contacts, doPayment]);
