@@ -1,0 +1,2 @@
+
+ALTER TABLE public.profiles ALTER COLUMN balance SET DEFAULT 1000;

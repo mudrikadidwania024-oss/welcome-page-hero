@@ -1,0 +1,10 @@
+project_id = "ddqktdkdlvmdqqnrsvkn"
+
+[functions.sarvam-stt]
+verify_jwt = false
+
+[functions.sarvam-tts]
+verify_jwt = false
+
+[functions.voice-command]
+verify_jwt = false
