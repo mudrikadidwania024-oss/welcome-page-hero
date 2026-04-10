@@ -134,7 +134,12 @@ export function stopSpeaking() {
   window.speechSynthesis?.cancel();
 }
 
-export function listenOnce(lang = "en-IN"): Promise<string> {
+/**
+ * Listen for speech input once. Returns the transcript.
+ * Resolves with empty string if no speech detected within timeout.
+ * Rejects on errors like "not-allowed".
+ */
+export function listenOnce(lang = "en-IN", timeoutMs = 8000): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!SpeechRecognition) {
       reject(new Error("Speech recognition not supported"));
@@ -145,21 +150,50 @@ export function listenOnce(lang = "en-IN"): Promise<string> {
     recognition.interimResults = false;
     recognition.lang = lang;
 
+    let resolved = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const done = (value: string) => {
+      if (resolved) return;
+      resolved = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve(value);
+    };
+
+    const fail = (err: Error) => {
+      if (resolved) return;
+      resolved = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      reject(err);
+    };
+
     recognition.onresult = (event: any) => {
       const text = event.results[0][0].transcript;
-      resolve(text);
+      done(text);
     };
+
     recognition.onerror = (event: any) => {
-      reject(new Error(event.error));
+      if (event.error === "no-speech") {
+        done(""); // No speech is not an error, just empty
+      } else {
+        fail(new Error(event.error));
+      }
     };
+
     recognition.onend = () => {
-      // If no result came, resolve empty
+      done(""); // If ended without result, resolve empty
     };
+
+    // Timeout fallback
+    timeoutId = setTimeout(() => {
+      try { recognition.stop(); } catch {}
+      done("");
+    }, timeoutMs);
 
     try {
       recognition.start();
     } catch (err) {
-      reject(err);
+      fail(err as Error);
     }
   });
 }

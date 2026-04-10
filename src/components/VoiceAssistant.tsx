@@ -106,18 +106,21 @@ const VoiceAssistant = () => {
     return data || [];
   }, [user]);
 
-  // Voice-driven flow: ask user a question and get spoken answer
-  const askAndListen = useCallback(async (question: string): Promise<string> => {
-    await speakAndShow(question);
-    setIsListening(true);
-    try {
-      const result = await listenOnce("en-IN");
-      setIsListening(false);
-      return result || "";
-    } catch {
-      setIsListening(false);
-      return "";
+  // Voice-driven flow: ask user a question and get spoken answer, with retries
+  const askAndListen = useCallback(async (question: string, retries = 2): Promise<string> => {
+    for (let i = 0; i < retries; i++) {
+      const prompt = i === 0 ? question : "I didn't catch that. Please say it again.";
+      await speakAndShow(prompt);
+      setIsListening(true);
+      try {
+        const result = await listenOnce("en-IN");
+        setIsListening(false);
+        if (result && result.trim()) return result;
+      } catch {
+        setIsListening(false);
+      }
     }
+    return "";
   }, [speakAndShow]);
 
   const processCommand = useCallback(async (text: string) => {
