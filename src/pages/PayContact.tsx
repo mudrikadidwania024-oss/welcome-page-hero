@@ -269,26 +269,28 @@ const PayContact = () => {
         }
       } else {
         // Contact not found - retry voice search
-        const retryName = await askVoice(`I couldn't find ${state.autoPayName} in your contacts. Please say the contact name again.`);
-        const retryFound = contacts.find(c => c.name.toLowerCase().includes(retryName.toLowerCase()));
-        if (retryFound) {
-          setSelectedContact(retryFound);
-          const amtAnswer = await askVoice(`Found ${retryFound.name}. How much do you want to send?`);
-          const amt = extractAmount(amtAnswer);
-          if (amt) {
-            setAmount(String(amt));
-            const confirmAnswer = await askVoice(`Sending ₹${amt} to ${retryFound.name}. Say confirm or yes to proceed.`);
-            const cLower = confirmAnswer.toLowerCase();
-            if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok")) {
-              await doPayment(retryFound, String(amt));
-            } else {
-              await speak("Payment cancelled.");
+        (async () => {
+          const retryName = await askVoice(`I couldn't find ${state.autoPayName} in your contacts. Please say the contact name again.`);
+          const retryFound = contacts.find(c => c.name.toLowerCase().includes(retryName.toLowerCase()));
+          if (retryFound) {
+            setSelectedContact(retryFound);
+            const amtAnswer = await askVoice(`Found ${retryFound.name}. How much do you want to send?`);
+            const amt = extractAmount(amtAnswer);
+            if (amt) {
+              setAmount(String(amt));
+              const confirmAnswer = await askVoice(`Sending ₹${amt} to ${retryFound.name}. Say confirm or yes to proceed.`);
+              const cLower = confirmAnswer.toLowerCase();
+              if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok")) {
+                await doPayment(retryFound, String(amt));
+              } else {
+                await speak("Payment cancelled.");
+              }
             }
+          } else {
+            await speak("Contact not found. Returning to home.");
+            navigate("/");
           }
-        } else {
-          await speak("Contact not found. Returning to home.");
-          navigate("/");
-        }
+        })();
       }
     }
   }, [location.state, contacts, doPayment]);
