@@ -1,19 +1,22 @@
 // Shared voice utility: TTS and STT helpers
 //
-// Chrome/Safari block speechSynthesis.speak() when called outside a direct
-// user-gesture.  To work around this we "warm up" the engine with a zero-length
-// utterance on the first user tap (see warmUpTTS below) and then reuse the
-// warmed-up state for later calls.
+// Two TTS engines:
+// 1. Sarvam AI TTS (speakSarvam) — high quality, server-side, used on login page
+// 2. Browser speechSynthesis (speak) — fallback, used elsewhere
+//
+// STT uses the browser's Web Speech API (SpeechRecognition).
+
+import { supabase } from "@/integrations/supabase/client";
 
 const SpeechRecognition =
   (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
 let ttsWarmedUp = false;
+let currentAudio: HTMLAudioElement | null = null;
 
 /**
  * Call this once from any click/tap handler to unlock the speech synthesis
- * engine for the rest of the page session.  It speaks a silent utterance so
- * that subsequent programmatic calls are allowed.
+ * engine for the rest of the page session.
  */
 export function warmUpTTS() {
   if (ttsWarmedUp || !("speechSynthesis" in window)) return;
@@ -24,8 +27,55 @@ export function warmUpTTS() {
 }
 
 /**
- * Speak text aloud.  Works from any context as long as warmUpTTS() was called
- * at least once during a user gesture.
+ * High-quality TTS via Sarvam AI edge function.
+ * Returns base64 MP3 audio and plays it. No gesture restrictions since
+ * it uses HTMLAudioElement (unlocked by warmUpTTS or any prior user tap).
+ */
+export async function speakSarvam(text: string, language = "en-IN"): Promise<void> {
+  stopSpeaking();
+
+  try {
+    const { data, error } = await supabase.functions.invoke("sarvam-tts", {
+      body: { text, language },
+    });
+
+    if (error || !data) {
+      console.warn("Sarvam TTS failed, falling back to browser TTS:", error);
+      return speak(text, language);
+    }
+
+    // Sarvam returns { audios: ["base64..."] }
+    const base64Audio = data.audios?.[0];
+    if (!base64Audio) {
+      console.warn("No audio in Sarvam response, falling back");
+      return speak(text, language);
+    }
+
+    return new Promise<void>((resolve) => {
+      const audio = new Audio(`data:audio/mp3;base64,${base64Audio}`);
+      currentAudio = audio;
+      audio.onended = () => { currentAudio = null; resolve(); };
+      audio.onerror = (e) => {
+        console.warn("Audio playback error:", e);
+        currentAudio = null;
+        resolve();
+      };
+      audio.play().catch(() => {
+        // If autoplay blocked, fall back to browser TTS
+        console.warn("Audio autoplay blocked, falling back to browser TTS");
+        currentAudio = null;
+        speak(text, language).then(resolve);
+      });
+    });
+  } catch (err) {
+    console.warn("Sarvam TTS error:", err);
+    return speak(text, language);
+  }
+}
+
+/**
+ * Browser-based TTS (fallback). Works from any context as long as warmUpTTS()
+ * was called at least once during a user gesture.
  */
 export function speak(text: string, lang = "en-IN"): Promise<void> {
   return new Promise((resolve) => {
@@ -34,22 +84,18 @@ export function speak(text: string, lang = "en-IN"): Promise<void> {
       return;
     }
 
-    // Cancel anything in-flight
     window.speechSynthesis.cancel();
 
-    // Small delay after cancel() to let Chrome clean up
     setTimeout(() => {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = lang;
       utterance.rate = 1;
       utterance.volume = 1;
 
-      // Chrome bug: synthesis can get stuck paused after cancel()
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
       }
 
-      // Chrome suspends long utterances — keep-alive timer
       let keepAlive: ReturnType<typeof setInterval> | null = null;
 
       const cleanup = () => {
@@ -70,7 +116,6 @@ export function speak(text: string, lang = "en-IN"): Promise<void> {
           cleanup();
           return;
         }
-        // Prevent Chrome from pausing long utterances
         window.speechSynthesis.pause();
         window.speechSynthesis.resume();
       }, 5000);
@@ -79,6 +124,13 @@ export function speak(text: string, lang = "en-IN"): Promise<void> {
 }
 
 export function stopSpeaking() {
+  // Stop Sarvam audio
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+    currentAudio = null;
+  }
+  // Stop browser TTS
   window.speechSynthesis?.cancel();
 }
 
