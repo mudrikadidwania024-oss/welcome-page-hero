@@ -6,23 +6,24 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { speak, stopSpeaking, listenOnce, extractDigits, extractAmount, warmUpTTS } from "@/lib/voice";
+import { authenticateWithBiometric } from "@/lib/biometric";
 
 const SpeechRecognition =
   (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
 const ROUTE_PATTERNS: { keywords: string[]; route: string; label: string; announcement?: string }[] = [
   { keywords: ["scan", "qr", "scanner"], route: "/scan", label: "QR scanner", announcement: "QR scanner is open. Point your camera at a QR code to scan." },
-  { keywords: ["pay contact", "send money", "pay someone", "contacts", "contact"], route: "/pay-contact", label: "Pay Contact", announcement: "Pay Contacts is open. You can say: search a contact, add new contact, or say a contact name to pay." },
-  { keywords: ["pay phone", "phone pay", "mobile pay", "pay by phone", "pay number"], route: "/pay-phone", label: "Pay by Phone", announcement: "Pay by Phone is open. Please say the 10 digit mobile number." },
-  { keywords: ["bank transfer", "neft", "imps"], route: "/bank-transfer", label: "Bank Transfer", announcement: "Bank Transfer is open. You can enter account details to transfer." },
-  { keywords: ["upi", "upi payment", "upi id"], route: "/upi", label: "UPI Payment", announcement: "UPI Payment is open. Please say the UPI ID." },
+  { keywords: ["pay contact", "send money", "pay someone", "contacts", "contact"], route: "/pay-contact", label: "Pay Contact", announcement: "Pay Contacts is open." },
+  { keywords: ["pay phone", "phone pay", "mobile pay", "pay by phone", "pay number"], route: "/pay-phone", label: "Pay by Phone", announcement: "Pay by Phone is open." },
+  { keywords: ["bank transfer", "neft", "imps"], route: "/bank-transfer", label: "Bank Transfer", announcement: "Bank Transfer is open." },
+  { keywords: ["upi", "upi payment", "upi id"], route: "/upi", label: "UPI Payment", announcement: "UPI Payment is open." },
   { keywords: ["self transfer", "self"], route: "/self-transfer", label: "Self Transfer", announcement: "Self Transfer is open." },
-  { keywords: ["pay bill", "bill", "electricity", "water bill", "bills"], route: "/pay-bills", label: "Bill Payments", announcement: "Bill Payments is open. You can pay Electricity, Water, Gas, Broadband, DTH, or Credit Card bills. Which bill would you like to pay?" },
-  { keywords: ["recharge", "mobile recharge", "prepaid"], route: "/recharge", label: "Recharge", announcement: "Recharge is open. Please say the mobile number to recharge." },
-  { keywords: ["history", "transaction", "past payment", "transactions"], route: "/history", label: "Transaction History", announcement: "Transaction History is open. Here you can see all your past payments." },
-  { keywords: ["profile", "account", "settings", "my profile"], route: "/profile", label: "Profile", announcement: "Profile page is open. You can view and update your account details." },
+  { keywords: ["pay bill", "bill", "electricity", "water bill", "bills"], route: "/pay-bills", label: "Bill Payments", announcement: "Bill Payments is open." },
+  { keywords: ["recharge", "mobile recharge", "prepaid"], route: "/recharge", label: "Recharge", announcement: "Recharge is open." },
+  { keywords: ["history", "transaction", "past payment", "transactions"], route: "/history", label: "Transaction History", announcement: "Transaction History is open." },
+  { keywords: ["profile", "account", "settings", "my profile"], route: "/profile", label: "Profile", announcement: "Profile page is open." },
   { keywords: ["balance page", "balance detail"], route: "/balance", label: "Balance page", announcement: "Balance page is open." },
-  { keywords: ["home", "main", "dashboard", "go back"], route: "/", label: "Home", announcement: "You are on the home page. What would you like to do?" },
+  { keywords: ["home", "main", "dashboard", "go back"], route: "/", label: "Home", announcement: "You are on the home page." },
 ];
 
 const defaultContacts = [
@@ -59,31 +60,33 @@ const VoiceAssistant = () => {
   const hasAutoStarted = useRef(false);
   const shouldAutoListen = useRef(true);
 
-  // Auto-start voice assistant after login on first user interaction (tap/click/key)
+  // Auto-start voice assistant immediately after login — no click needed
+  // We use a short delay to let the page render, then auto-activate
   useEffect(() => {
     if (!user || hasAutoStarted.current) return;
+    if (location.pathname === "/auth") return;
 
     const autoActivate = () => {
       if (hasAutoStarted.current) return;
       hasAutoStarted.current = true;
       warmUpTTS();
-      // Small delay to let page render
-      setTimeout(() => {
-        setShowOverlay(true);
-        speakAndShow("Welcome to VaaniPay. I am your voice assistant. What would you like to do? You can say: send money, pay bills, check balance, scan QR, recharge, or open any section.").then(() => {
-          autoStartListening();
-        });
-      }, 600);
+      setShowOverlay(true);
+      speakAndShow("Welcome to VaaniPay. What would you like to do? You can say: send money, pay bills, check balance, scan QR, or recharge.").then(() => {
+        autoStartListening();
+      });
     };
 
-    // Listen for any user gesture to unlock audio
+    // Try to auto-start after a short delay. Browser may block audio without gesture,
+    // so also listen for first interaction as fallback.
+    const timer = setTimeout(autoActivate, 800);
     const events = ["click", "touchstart", "keydown"];
     events.forEach(e => document.addEventListener(e, autoActivate, { once: true }));
 
     return () => {
+      clearTimeout(timer);
       events.forEach(e => document.removeEventListener(e, autoActivate));
     };
-  }, [user]);
+  }, [user, location.pathname]);
 
   const speakAndShow = useCallback(async (text: string) => {
     setIsSpeaking(true);
@@ -122,7 +125,6 @@ const VoiceAssistant = () => {
     return data || [];
   }, [user]);
 
-  // Voice-driven flow: ask user a question and get spoken answer, with retries
   const askAndListen = useCallback(async (question: string, retries = 2): Promise<string> => {
     for (let i = 0; i < retries; i++) {
       const prompt = i === 0 ? question : "I didn't catch that. Please say it again.";
@@ -145,10 +147,16 @@ const VoiceAssistant = () => {
     const lowerText = text.toLowerCase().trim();
 
     try {
-      // ===== BALANCE CHECK =====
+      // ===== BALANCE CHECK (now requires biometric) =====
       if (lowerText.includes("balance") || lowerText.includes("how much") || lowerText.includes("kitna") || lowerText.includes("paisa") || lowerText.includes("money left") || lowerText.includes("account")) {
-        const balance = await fetchBalance();
-        await speakAndShow(`Your current balance is ₹${Number(balance).toLocaleString("en-IN")}`);
+        await speakAndShow("Please authenticate to check your balance.");
+        const bioOk = await authenticateWithBiometric("balance check");
+        if (bioOk) {
+          const balance = await fetchBalance();
+          await speakAndShow(`Your current balance is ₹${Number(balance).toLocaleString("en-IN")}`);
+        } else {
+          await speakAndShow("Authentication cancelled.");
+        }
         setIsProcessing(false);
         autoStartListening();
         return;
@@ -186,39 +194,32 @@ const VoiceAssistant = () => {
         return;
       }
 
-      // ===== PAY BILLS BY VOICE =====
+      // ===== PAY BILLS BY VOICE (no confirm, direct biometric) =====
       const billMatch = lowerText.match(/(?:pay|bill|pay\s+(?:my\s+)?|bharo\s+)(electricity|water|gas|broadband|internet|wifi|dth|credit\s*card|bijli|pani|light|tv|net)\s*(?:bill|ka\s+bill)?/i);
       if (billMatch || lowerText.includes("pay bill") || lowerText.includes("bill payment") || lowerText.includes("bill bharo")) {
         let category = billMatch ? billMatch[1].toLowerCase() : null;
         
         if (!category) {
-          const answer = await askAndListen("Which bill would you like to pay? Electricity, water, gas, broadband, DTH, or credit card?");
+          const answer = await askAndListen("Which bill? Electricity, water, gas, broadband, DTH, or credit card?");
           category = answer.toLowerCase();
         }
 
         const found = billCategories.find(b => b.keywords.some(k => category!.includes(k)));
         if (found) {
-          const amountAnswer = await askAndListen(`How much do you want to pay for ${found.label}?`);
+          const amountAnswer = await askAndListen(`How much for ${found.label}?`);
           const amt = extractAmount(amountAnswer);
           
-          const idAnswer = await askAndListen("Please tell me your consumer or account ID.");
+          const idAnswer = await askAndListen("Please say your consumer or account ID.");
           const consumerId = idAnswer.trim();
 
           if (amt && consumerId) {
-            const confirmAnswer = await askAndListen(`You want to pay ₹${amt} for ${found.label} bill to ${found.provider} with ID ${consumerId}. Say confirm or yes to proceed.`);
-            const cLower = confirmAnswer.toLowerCase();
-            if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok") || cLower.includes("proceed")) {
-              await speakAndShow(`Paying ₹${amt} for ${found.label} bill. Opening bill payment.`);
-              navigate("/pay-bills", { state: { autoBill: found.label, autoAmount: amt, autoConsumerId: consumerId, autoConfirm: true } });
-            } else {
-              await speakAndShow("Bill payment cancelled.");
-            }
-            setTimeout(() => setShowOverlay(false), 1500);
+            await speakAndShow(`Paying ₹${amt} for ${found.label}. Please authenticate.`);
+            navigate("/pay-bills", { state: { autoBill: found.label, autoAmount: amt, autoConsumerId: consumerId, autoConfirm: true } });
           } else {
-            await speakAndShow("I couldn't get the details. Opening bill payments for you.");
+            await speakAndShow("Couldn't get details. Opening bill payments.");
             navigate("/pay-bills");
-            setTimeout(() => setShowOverlay(false), 1500);
           }
+          setTimeout(() => setShowOverlay(false), 1500);
         } else {
           await speakAndShow("Opening bill payments.");
           navigate("/pay-bills");
@@ -228,9 +229,9 @@ const VoiceAssistant = () => {
         return;
       }
 
-      // ===== RECHARGE BY VOICE =====
+      // ===== RECHARGE BY VOICE (no confirm, direct biometric) =====
       if (lowerText.includes("recharge") || lowerText.includes("prepaid") || lowerText.includes("top up") || lowerText.includes("topup")) {
-        const phoneAnswer = await askAndListen("Which mobile number do you want to recharge?");
+        const phoneAnswer = await askAndListen("Which mobile number to recharge?");
         const digits = extractDigits(phoneAnswer);
         const rechargePhone = digits.length >= 10 ? digits.slice(0, 10) : "";
 
@@ -238,20 +239,14 @@ const VoiceAssistant = () => {
           const operatorAnswer = await askAndListen("Which operator? Jio, Airtel, Vi, or BSNL?");
           const operator = operatorAnswer.trim();
 
-          const amtAnswer = await askAndListen("How much do you want to recharge?");
+          const amtAnswer = await askAndListen("How much to recharge?");
           const amt = extractAmount(amtAnswer);
 
           if (amt) {
-            const confirmAnswer = await askAndListen(`Recharging ${rechargePhone} on ${operator} for ₹${amt}. Say confirm or yes to proceed.`);
-            const cLower = confirmAnswer.toLowerCase();
-            if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok")) {
-              await speakAndShow(`Opening recharge for ${rechargePhone} on ${operator} for ₹${amt}.`);
-              navigate("/recharge", { state: { autoPhone: rechargePhone, autoOperator: operator, autoAmount: amt, autoConfirm: true } });
-            } else {
-              await speakAndShow("Recharge cancelled.");
-            }
+            await speakAndShow(`Recharging ${rechargePhone} on ${operator} for ₹${amt}. Please authenticate.`);
+            navigate("/recharge", { state: { autoPhone: rechargePhone, autoOperator: operator, autoAmount: amt, autoConfirm: true } });
           } else {
-            await speakAndShow(`Opening recharge for ${rechargePhone} on ${operator}.`);
+            await speakAndShow(`Opening recharge for ${rechargePhone}.`);
             navigate("/recharge", { state: { autoPhone: rechargePhone, autoOperator: operator } });
           }
           setTimeout(() => setShowOverlay(false), 1500);
@@ -264,8 +259,7 @@ const VoiceAssistant = () => {
         return;
       }
 
-      // ===== PAY / SEND MONEY (with synonyms) =====
-      // Synonyms: send, pay, transfer, give, bhejo, de do, dena
+      // ===== PAY / SEND MONEY (no confirm step, direct biometric) =====
       const payMatch = lowerText.match(/(?:send|pay|transfer|give|bhejo|de\s*do|dena)\s+(?:rs\.?|₹|rupees?|rupay|rupaiye)?\s*(\d+)\s+(?:to|ko|for)\s+(.+)/i);
       const payMatch2 = !payMatch ? lowerText.match(/(?:send|pay|transfer|give|bhejo|de\s*do|dena)\s+(?:rs\.?|₹|rupees?|rupay|rupaiye)?\s*(\d+)\s+(.+)/i) : null;
       const payMatch3 = !payMatch && !payMatch2 ? lowerText.match(/(?:send|pay|transfer|give|bhejo)\s+(?:money\s+)?(?:to\s+)?(.+?)(?:\s+(\d+))?$/i) : null;
@@ -278,67 +272,57 @@ const VoiceAssistant = () => {
           : payMatch2 ? payMatch2[2].replace(/^(?:to|ko|for)\s+/i, "").trim()
           : payMatch3?.[1]?.replace(/^to\s+/i, "").trim() || "";
 
-        // Clean up recipient name
         recipient = recipient.replace(/\s*(rupees?|rupay|rupaiye|rs\.?)\s*/gi, "").trim();
 
         if (!recipient || recipient.length < 2) {
-          await speakAndShow("Sorry, I didn't catch the recipient name. Please try again.");
+          await speakAndShow("Sorry, I didn't catch the name. Please try again.");
           setIsProcessing(false);
           autoStartListening();
           return;
         }
 
-        // Search contacts
         const foundContact = defaultContacts.find(c => c.name.toLowerCase().includes(recipient.toLowerCase()));
 
         if (foundContact) {
-          const payAmount = amount || null;
-          let finalAmount = payAmount;
+          let finalAmount = amount || null;
 
           if (!finalAmount) {
-            const amtAnswer = await askAndListen(`How much do you want to send to ${foundContact.name}?`);
+            const amtAnswer = await askAndListen(`How much to send to ${foundContact.name}?`);
             finalAmount = extractAmount(amtAnswer);
           }
 
           if (finalAmount) {
-            const confirmAnswer = await askAndListen(`Sending ₹${finalAmount} to ${foundContact.name}. Say confirm or yes to proceed, or cancel to stop.`);
-            const cLower = confirmAnswer.toLowerCase();
-            if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok") || cLower.includes("proceed") || cLower.includes("ha")) {
-              await speakAndShow(`Confirmed. Processing payment of ₹${finalAmount} to ${foundContact.name}.`);
-              navigate("/pay-contact", { state: { autoPayName: foundContact.name, autoPayAmount: finalAmount, autoConfirm: true } });
-            } else {
-              await speakAndShow("Payment cancelled.");
-              autoStartListening();
-            }
+            // No confirm step — go straight to biometric + payment
+            await speakAndShow(`Sending ₹${finalAmount} to ${foundContact.name}. Please authenticate.`);
+            navigate("/pay-contact", { state: { autoPayName: foundContact.name, autoPayAmount: finalAmount, autoConfirm: true } });
           } else {
-            await speakAndShow(`Opening payment to ${foundContact.name}. Please enter the amount.`);
+            await speakAndShow(`Opening payment to ${foundContact.name}.`);
             navigate("/pay-contact", { state: { autoPayName: foundContact.name } });
           }
           setTimeout(() => setShowOverlay(false), 1500);
         } else {
-          // Contact not found - ask for phone or UPI
-          const answer = await askAndListen(`I couldn't find ${recipient} in your contacts. Would you like to pay by mobile number or UPI ID? Say mobile or UPI.`);
+          const answer = await askAndListen(`${recipient} not found. Pay by mobile number or UPI? Say mobile or UPI.`);
           const answerLower = answer.toLowerCase();
 
           if (answerLower.includes("mobile") || answerLower.includes("phone") || answerLower.includes("number")) {
-            const phoneAnswer = await askAndListen("Please tell me the 10 digit mobile number.");
+            const phoneAnswer = await askAndListen("Say the 10 digit mobile number.");
             const digits = extractDigits(phoneAnswer);
             const phoneNum = digits.length >= 10 ? digits.slice(0, 10) : "";
             
             if (phoneNum) {
-              await speakAndShow(`Opening payment of ${amount ? `₹${amount}` : ""} to ${phoneNum}.`);
+              await speakAndShow(`Opening payment to ${phoneNum}.`);
               navigate("/pay-phone", { state: { autoPhone: phoneNum, autoAmount: amount } });
             } else {
-              await speakAndShow("I couldn't get the number. Opening pay by phone.");
+              await speakAndShow("Couldn't get the number. Opening pay by phone.");
               navigate("/pay-phone");
             }
             setTimeout(() => setShowOverlay(false), 1500);
           } else if (answerLower.includes("upi")) {
-            const upiAnswer = await askAndListen("Please tell me the UPI ID.");
+            const upiAnswer = await askAndListen("Say the UPI ID.");
             const upiId = upiAnswer.trim().replace(/\s+/g, "");
 
             if (upiId) {
-              await speakAndShow(`Opening UPI payment ${amount ? `of ₹${amount}` : ""} to ${upiId}.`);
+              await speakAndShow(`Opening UPI payment to ${upiId}.`);
               navigate("/upi", { state: { autoUpi: upiId, autoAmount: amount } });
             } else {
               await speakAndShow("Opening UPI payment page.");
@@ -346,7 +330,7 @@ const VoiceAssistant = () => {
             }
             setTimeout(() => setShowOverlay(false), 1500);
           } else {
-            await speakAndShow("Opening pay contacts page.");
+            await speakAndShow("Opening pay contacts.");
             navigate("/pay-contact", { state: { autoPayName: recipient, autoPayAmount: amount } });
             setTimeout(() => setShowOverlay(false), 1500);
           }
@@ -355,7 +339,7 @@ const VoiceAssistant = () => {
         return;
       }
 
-      // ===== NAVIGATION (with voice announcement of tab options) =====
+      // ===== NAVIGATION =====
       for (const pattern of ROUTE_PATTERNS) {
         if (pattern.keywords.some((kw) => lowerText.includes(kw))) {
           await speakAndShow(pattern.announcement || `Opening ${pattern.label}`);
@@ -368,7 +352,6 @@ const VoiceAssistant = () => {
         }
       }
 
-      // Generic open/go
       const openMatch = lowerText.match(/(?:open|go to|show|navigate to|kholo|dikhao)\s+(.+)/i);
       if (openMatch) {
         const target = openMatch[1].trim().toLowerCase();
@@ -385,13 +368,12 @@ const VoiceAssistant = () => {
         }
       }
 
-      // ===== UNKNOWN - auto restart listening =====
-      await speakAndShow("Sorry, I didn't understand that. Try saying: send 500 to Rahul, give 200 rupees to Priya, pay electricity bill, recharge, open contacts, or check my balance.");
+      await speakAndShow("Sorry, I didn't understand. Try: send 500 to Rahul, pay electricity bill, recharge, or check balance.");
       setIsProcessing(false);
       autoStartListening();
     } catch (err) {
       console.error("Command error:", err);
-      await speakAndShow("Sorry, something went wrong. Please try again.");
+      await speakAndShow("Something went wrong. Please try again.");
       setIsProcessing(false);
       autoStartListening();
     }
@@ -441,8 +423,6 @@ const VoiceAssistant = () => {
       setIsListening(false);
       if (event.error === "not-allowed") {
         toast.error("Microphone access denied. Please allow microphone.");
-      } else if (event.error === "no-speech") {
-        autoStartListening();
       } else {
         autoStartListening();
       }
@@ -457,7 +437,6 @@ const VoiceAssistant = () => {
     } catch (err) {
       console.error("Recognition start error:", err);
       setIsListening(false);
-      toast.error("Could not start speech recognition");
     }
   }, [processCommand, autoStartListening]);
 
@@ -482,7 +461,6 @@ const VoiceAssistant = () => {
 
   return (
     <>
-      {/* Always-visible mic button — tapping re-activates if overlay was closed */}
       <button
         onClick={() => {
           warmUpTTS();
@@ -547,7 +525,7 @@ const VoiceAssistant = () => {
           )}
 
           <p className="text-xs text-muted-foreground mt-6 text-center max-w-xs">
-            Try: "Send 500 to Rahul", "Give 200 rupees to Priya", "Pay electricity bill", "Open contacts", "Recharge"
+            Try: "Send 500 to Rahul", "Pay electricity bill", "Recharge", "Check balance"
           </p>
         </div>
       )}
