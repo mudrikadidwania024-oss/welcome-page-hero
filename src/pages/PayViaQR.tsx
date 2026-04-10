@@ -9,6 +9,20 @@ import { toast } from "sonner";
 import { speak, listenOnce, extractAmount } from "@/lib/voice";
 import { authenticateWithBiometric } from "@/lib/biometric";
 
+const askVoice = async (question: string, retries = 3): Promise<string> => {
+  for (let i = 0; i < retries; i++) {
+    await speak(question);
+    try {
+      const result = await listenOnce("en-IN");
+      if (result && result.trim()) return result;
+    } catch {}
+    if (i < retries - 1) {
+      question = "I didn't catch that. Please try again.";
+    }
+  }
+  return "";
+};
+
 const PayViaQR = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -47,27 +61,87 @@ const PayViaQR = () => {
     }
     setReceiver(data);
 
-    // Speak the receiver name and ask for amount
+    // Full voice-driven payment flow
     if (!hasSpoken.current) {
       hasSpoken.current = true;
       const name = data.display_name || data.phone || "this user";
-      await speak(`You are paying ${name}. How much would you like to send?`);
-      
-      // Listen for amount
-      try {
-        const result = await listenOnce("en-IN");
-        if (result) {
-          const amt = extractAmount(result);
-          if (amt && amt > 0) {
-            setAmount(String(amt));
-            await speak(`Got it. ₹${amt}. Tap pay to confirm, or say the amount again.`);
-          } else {
-            await speak("I didn't catch the amount. Please type it in.");
-          }
+
+      // Ask for amount with retry
+      const amtAnswer = await askVoice(`You are paying ${name}. How much would you like to send?`);
+      const amt = extractAmount(amtAnswer);
+
+      if (amt && amt > 0) {
+        setAmount(String(amt));
+
+        // Ask for confirmation
+        const confirmAnswer = await askVoice(
+          `Sending ₹${amt} to ${name}. Say confirm or yes to proceed, or cancel to stop.`
+        );
+        const cLower = confirmAnswer.toLowerCase();
+        if (
+          cLower.includes("confirm") || cLower.includes("yes") ||
+          cLower.includes("haan") || cLower.includes("ok") ||
+          cLower.includes("proceed") || cLower.includes("ha")
+        ) {
+          await doPayVoice(data, amt);
+        } else {
+          await speak("Payment cancelled. You can still pay using the form.");
         }
-      } catch {
-        // User didn't speak, they can type
+      } else {
+        await speak("I couldn't get the amount. Please say it again.");
+        // Second attempt
+        const amt2Answer = await askVoice(`How much do you want to send to ${name}?`);
+        const amt2 = extractAmount(amt2Answer);
+        if (amt2 && amt2 > 0) {
+          setAmount(String(amt2));
+          const confirmAnswer = await askVoice(
+            `Sending ₹${amt2} to ${name}. Say confirm or yes to proceed.`
+          );
+          const cLower = confirmAnswer.toLowerCase();
+          if (
+            cLower.includes("confirm") || cLower.includes("yes") ||
+            cLower.includes("haan") || cLower.includes("ok") ||
+            cLower.includes("proceed") || cLower.includes("ha")
+          ) {
+            await doPayVoice(data, amt2);
+          } else {
+            await speak("Payment cancelled.");
+          }
+        } else {
+          await speak("I still couldn't get the amount. You can type it in the form below.");
+        }
       }
+    }
+  };
+
+  const doPayVoice = async (receiverData: any, payAmount: number) => {
+    await speak("Please authenticate with your fingerprint to confirm.");
+    const bioOk = await authenticateWithBiometric(`₹${payAmount}`);
+    if (!bioOk) {
+      await speak("Authentication cancelled. Payment not processed.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("process-payment", {
+        body: {
+          receiver_id: receiverData.id,
+          amount: payAmount,
+          description: description || `Payment to ${receiverData.display_name}`,
+        },
+      });
+
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || "Payment failed");
+
+      await speak(`Payment of ₹${payAmount} to ${receiverData.display_name || "the recipient"} confirmed successfully!`);
+      setShowSuccess(true);
+    } catch (err: any) {
+      await speak(`Payment failed. ${err.message || ""}`);
+      toast.error(err.message || "Payment failed");
+    } finally {
+      setLoading(false);
     }
   };
 

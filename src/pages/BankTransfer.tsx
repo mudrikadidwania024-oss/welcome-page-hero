@@ -7,9 +7,18 @@ import { useState, useEffect, useRef } from "react";
 import { speak, listenOnce, extractDigits, extractAmount, warmUpTTS } from "@/lib/voice";
 import { authenticateWithBiometric } from "@/lib/biometric";
 
-const askVoice = async (question: string): Promise<string> => {
-  await speak(question);
-  try { return (await listenOnce("en-IN")) || ""; } catch { return ""; }
+const askVoice = async (question: string, retries = 3): Promise<string> => {
+  for (let i = 0; i < retries; i++) {
+    await speak(question);
+    try {
+      const result = await listenOnce("en-IN");
+      if (result && result.trim()) return result;
+    } catch {}
+    if (i < retries - 1) {
+      question = "I didn't catch that. Please try again.";
+    }
+  }
+  return "";
 };
 
 const BankTransfer = () => {
@@ -30,51 +39,121 @@ const BankTransfer = () => {
 
     const runVoice = async () => {
       await speak(
-        "Bank Transfer is open. You can transfer money to any bank account using IMPS or NEFT. " +
-        "I will guide you through the details. You can also fill the form manually."
+        "Bank Transfer is open. I will guide you through the details step by step."
       );
 
-      const acAnswer = await askVoice("Please say the account number.");
-      const acDigits = extractDigits(acAnswer);
-      if (acDigits.length >= 6) {
-        setFormData(prev => ({ ...prev, accountNumber: acDigits, reAccountNumber: acDigits }));
+      // Account number with retries
+      let acDigits = "";
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const prompt = attempt === 0
+          ? "Please say the account number."
+          : "I didn't catch the account number. Please say it again slowly, digit by digit.";
+        const acAnswer = await askVoice(prompt, 1);
+        const digits = extractDigits(acAnswer);
+        if (digits.length >= 6) {
+          acDigits = digits;
+          break;
+        }
+        if (digits.length > 0) {
+          await speak(`I heard only ${digits.length} digits. The account number should be at least 6 digits.`);
+        }
+      }
 
-        const ifscAnswer = await askVoice("Now please say the IFSC code, letter by letter.");
-        const ifsc = ifscAnswer.replace(/\s+/g, "").toUpperCase();
-        if (ifsc.length >= 4) {
-          setFormData(prev => ({ ...prev, ifsc }));
+      if (!acDigits) {
+        await speak("I couldn't get the account number after multiple tries. Please say it one more time.");
+        const lastAc = await askVoice("Please say the account number digit by digit.", 1);
+        acDigits = extractDigits(lastAc);
+      }
 
-          const nameAnswer = await askVoice("Please say the account holder's name.");
-          if (nameAnswer.trim()) {
-            setFormData(prev => ({ ...prev, name: nameAnswer.trim() }));
+      if (acDigits.length < 6) {
+        await speak("I still couldn't get the account number. You can type it in the form.");
+        return;
+      }
 
-            const amtAnswer = await askVoice("How much do you want to transfer?");
-            const amt = extractAmount(amtAnswer);
-            if (amt) {
-              setAmount(String(amt));
-              const confirmAnswer = await askVoice(
-                `Transferring ₹${amt} to ${nameAnswer.trim()}, account ${acDigits}, IFSC ${ifsc}. Say confirm or yes to proceed.`
-              );
-              const cLower = confirmAnswer.toLowerCase();
-              if (cLower.includes("confirm") || cLower.includes("yes") || cLower.includes("haan") || cLower.includes("ok")) {
-                await speak("Please authenticate with your fingerprint.");
-                const bioOk = await authenticateWithBiometric(`₹${amt}`);
-                if (bioOk) {
-                  await speak(`₹${amt} transferred successfully to ${nameAnswer.trim()}!`);
-                  setShowSuccess(true);
-                } else {
-                  await speak("Authentication cancelled.");
-                }
-              } else {
-                await speak("Transfer cancelled. You can fill the form manually.");
-              }
-            } else {
-              await speak("I didn't catch the amount. Please enter it manually.");
-            }
-          }
+      setFormData(prev => ({ ...prev, accountNumber: acDigits, reAccountNumber: acDigits }));
+      await speak(`Got account number: ${acDigits.split("").join(" ")}.`);
+
+      // IFSC with retries
+      let ifsc = "";
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const prompt = attempt === 0
+          ? "Now please say the IFSC code, letter by letter."
+          : "I didn't catch the IFSC code. Please spell it out slowly.";
+        const ifscAnswer = await askVoice(prompt, 1);
+        const cleaned = ifscAnswer.replace(/\s+/g, "").toUpperCase();
+        if (cleaned.length >= 4) {
+          ifsc = cleaned;
+          break;
+        }
+      }
+
+      if (!ifsc) {
+        await speak("I couldn't get the IFSC code. You can type it in the form.");
+        return;
+      }
+
+      setFormData(prev => ({ ...prev, ifsc }));
+      await speak(`IFSC code: ${ifsc}.`);
+
+      // Name with retries
+      let holderName = "";
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const prompt = attempt === 0
+          ? "Please say the account holder's name."
+          : "I didn't catch the name. Please say it again clearly.";
+        const nameAnswer = await askVoice(prompt, 1);
+        if (nameAnswer.trim().length >= 2) {
+          holderName = nameAnswer.trim();
+          break;
+        }
+      }
+
+      if (!holderName) {
+        await speak("I couldn't get the name. You can type it in the form.");
+        return;
+      }
+
+      setFormData(prev => ({ ...prev, name: holderName }));
+
+      // Amount with retries
+      let transferAmt: number | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const prompt = attempt === 0
+          ? "How much do you want to transfer?"
+          : "I didn't catch the amount. Please say it again.";
+        const amtAnswer = await askVoice(prompt, 1);
+        transferAmt = extractAmount(amtAnswer);
+        if (transferAmt && transferAmt > 0) break;
+        transferAmt = null;
+      }
+
+      if (!transferAmt) {
+        await speak("I couldn't get the amount. You can type it in the form.");
+        return;
+      }
+
+      setAmount(String(transferAmt));
+
+      // Confirmation
+      const confirmAnswer = await askVoice(
+        `Transferring ₹${transferAmt} to ${holderName}, account ${acDigits}, IFSC ${ifsc}. Say confirm or yes to proceed.`
+      );
+      const cLower = confirmAnswer.toLowerCase();
+      if (
+        cLower.includes("confirm") || cLower.includes("yes") ||
+        cLower.includes("haan") || cLower.includes("ok") ||
+        cLower.includes("proceed") || cLower.includes("ha")
+      ) {
+        await speak("Please authenticate with your fingerprint.");
+        const bioOk = await authenticateWithBiometric(`₹${transferAmt}`);
+        if (bioOk) {
+          await speak(`₹${transferAmt} transferred successfully to ${holderName}!`);
+          setShowSuccess(true);
+        } else {
+          await speak("Authentication cancelled.");
         }
       } else {
-        await speak("I didn't catch the account number. Please fill the form manually.");
+        await speak("Transfer cancelled.");
       }
     };
 
