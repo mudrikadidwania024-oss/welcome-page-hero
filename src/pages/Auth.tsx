@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { speak, listenOnce, extractDigits, stopSpeaking, warmUpTTS } from "@/lib/voice";
+import { speakSarvam, listenOnce, extractDigits, stopSpeaking, warmUpTTS } from "@/lib/voice";
 import vaanipayLogo from "@/assets/vaanipay-logo.jpeg";
 import { Mic, MicOff, Loader2 } from "lucide-react";
 
