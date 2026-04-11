@@ -185,7 +185,7 @@ User Speaks → Speech-to-Text (Sarvam AI) → NLU Intent Detection
 | Unnati Thakur | Member |
 | Shreenarth Pillai | Member |
 | Aryan Kumar | Member |
-| Unnati Thakur | Member |
+
 
 
 ---
